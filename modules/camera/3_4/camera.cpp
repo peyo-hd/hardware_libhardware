@@ -16,7 +16,7 @@
 
 // Modified from hardware/libhardware/modules/camera/Camera.cpp
 
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 #define LOG_TAG "Camera"
 
 #include "camera.h"
