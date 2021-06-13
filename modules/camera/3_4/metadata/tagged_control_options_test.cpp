@@ -24,6 +24,7 @@
 using testing::Return;
 using testing::SetArgPointee;
 using testing::Test;
+using testing::DoAll;
 using testing::_;
 
 namespace v4l2_camera_hal {
