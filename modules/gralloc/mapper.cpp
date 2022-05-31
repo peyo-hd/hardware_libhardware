@@ -34,7 +34,12 @@
 
 /*****************************************************************************/
 
-static int gralloc_map(gralloc_module_t const* /*module*/,
+uint32_t getHandle(struct private_module_t *m, int prime_fd);
+void unMapDrmBuffer(struct private_module_t *m, uint32_t handle, intptr_t map);
+intptr_t mmapDrmBuffer(struct private_module_t *m, uint32_t handle, size_t size);
+void init_kms(struct private_module_t *m);
+
+static int gralloc_map(gralloc_module_t const* module,
         buffer_handle_t handle,
         void** vaddr)
 {
@@ -50,6 +55,12 @@ static int gralloc_map(gralloc_module_t const* /*module*/,
         hnd->base = uintptr_t(mappedAddress) + hnd->offset;
         //ALOGD("gralloc_map() succeeded fd=%d, off=%d, size=%d, vaddr=%p",
         //        hnd->fd, hnd->offset, hnd->size, mappedAddress);
+    } else {
+      init_kms((struct private_module_t *)module);
+	hnd->drm_handle = getHandle((struct private_module_t *)module, hnd->fd);
+	hnd->base = mmapDrmBuffer((struct private_module_t *)module, hnd->drm_handle, 720 * 480 * 4);
+        ALOGI("gralloc_map() drm_handle %d, prime_fd %d, base %lx",
+	  hnd->drm_handle, hnd->fd, hnd->base);
     }
     *vaddr = (void*)hnd->base;
     return 0;
@@ -64,6 +75,12 @@ static int gralloc_unmap(gralloc_module_t const* /*module*/,
         size_t size = hnd->size;
         //ALOGD("unmapping from %p, size=%d", base, size);
         if (munmap(base, size) < 0) {
+            ALOGE("Could not unmap %s", strerror(errno));
+        }
+    } else {
+        ALOGI("gralloc_unmap() drm_handle %d, prime_fd %d, base %lx",
+	  hnd->drm_handle, hnd->fd, hnd->base);
+        if (munmap((void *)hnd->base, (size_t)(720 * 480 * 4)) < 0) {
             ALOGE("Could not unmap %s", strerror(errno));
         }
     }

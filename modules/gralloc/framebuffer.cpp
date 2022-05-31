@@ -89,7 +89,7 @@ static int fb_post(struct framebuffer_device_t* dev, buffer_handle_t buffer)
             m->base.unlock(&m->base, buffer); 
             return -errno;
         }
-        m->currentBuffer = buffer;
+        //m->currentBuffer = buffer;
         
     } else {
         // If we can't do the page_flip, just copy the buffer to the front 
@@ -119,157 +119,36 @@ static int fb_post(struct framebuffer_device_t* dev, buffer_handle_t buffer)
 
 /*****************************************************************************/
 
-int mapFrameBufferLocked(struct private_module_t* module, int format)
+int mapFrameBufferLocked(struct private_module_t* module, int /*format*/)
 {
     // already initialized...
     if (module->framebuffer) {
         return 0;
     }
-        
-    char const * const device_template[] = {
-            "/dev/graphics/fb%u",
-            "/dev/fb%u",
-            0 };
-
-    int fd = -1;
-    int i=0;
-    char name[64];
-
-    while ((fd==-1) && device_template[i]) {
-        snprintf(name, 64, device_template[i], 0);
-        fd = open(name, O_RDWR, 0);
-        i++;
-    }
-    if (fd < 0)
-        return -errno;
-
-    struct fb_fix_screeninfo finfo;
-    if (ioctl(fd, FBIOGET_FSCREENINFO, &finfo) == -1)
-        return -errno;
 
     struct fb_var_screeninfo info;
-    if (ioctl(fd, FBIOGET_VSCREENINFO, &info) == -1)
-        return -errno;
 
-    info.reserved[0] = 0;
-    info.reserved[1] = 0;
-    info.reserved[2] = 0;
-    info.xoffset = 0;
-    info.yoffset = 0;
-    info.activate = FB_ACTIVATE_NOW;
-
-    /*
-     * Request NUM_BUFFERS screens
-     * To enable page flipping, NUM_BUFFERS should be at least 2.
-     */
-    info.yres_virtual = info.yres * NUM_BUFFERS;
-
-    switch (format) {
-    case HAL_PIXEL_FORMAT_RGBA_8888:
-        info.bits_per_pixel = 32;
-        info.red.offset = 0;
-        info.red.length = 8;
-        info.green.offset = 8;
-        info.green.length = 8;
-        info.blue.offset = 16;
-        info.blue.length = 8;
-        break;
-    default:
-        ALOGW("unknown format: %d", format);
-        break;
-    }
+    info.bits_per_pixel = 32;
+    info.red.offset = 0;
+    info.red.length = 8;
+    info.green.offset = 8;
+    info.green.length = 8;
+    info.blue.offset = 16;
+    info.blue.length = 8;
 
     uint32_t flags = PAGE_FLIP;
-#if USE_PAN_DISPLAY
-    if (ioctl(fd, FBIOPAN_DISPLAY, &info) == -1) {
-        ALOGW("FBIOPAN_DISPLAY failed, page flipping not supported");
-#else
-    if (ioctl(fd, FBIOPUT_VSCREENINFO, &info) == -1) {
-        ALOGW("FBIOPUT_VSCREENINFO failed, page flipping not supported");
-#endif
-        info.yres_virtual = info.yres;
-        flags &= ~PAGE_FLIP;
-    }
 
-    if (info.yres_virtual < info.yres * 2) {
-        // we need at least 2 for page-flipping
-        info.yres_virtual = info.yres;
-        flags &= ~PAGE_FLIP;
-        ALOGW("page flipping not supported (yres_virtual=%d, requested=%d)",
-                info.yres_virtual, info.yres*2);
-    }
+    int refreshRate =  60*1000;  // 60 Hz
 
-    if (ioctl(fd, FBIOGET_VSCREENINFO, &info) == -1)
-        return -errno;
+      info.width  = 720;
+      info.height = 480;
 
-    uint64_t  refreshQuotient =
-    (
-            uint64_t( info.upper_margin + info.lower_margin + info.yres )
-            * ( info.left_margin  + info.right_margin + info.xres )
-            * info.pixclock
-    );
-
-    /* Beware, info.pixclock might be 0 under emulation, so avoid a
-     * division-by-0 here (SIGFPE on ARM) */
-    int refreshRate = refreshQuotient > 0 ? (int)(1000000000000000LLU / refreshQuotient) : 0;
-
-    if (refreshRate == 0) {
-        // bleagh, bad info from the driver
-        refreshRate = 60*1000;  // 60 Hz
-    }
-
-    if (int(info.width) <= 0 || int(info.height) <= 0) {
-        // the driver doesn't return that information
-        // default to 160 dpi
-        info.width  = ((info.xres * 25.4f)/160.0f + 0.5f);
-        info.height = ((info.yres * 25.4f)/160.0f + 0.5f);
-    }
-
-    float xdpi = (info.xres * 25.4f) / info.width;
-    float ydpi = (info.yres * 25.4f) / info.height;
+      float xdpi = 160.0f;
+      float ydpi = 160.0f;
     float fps  = refreshRate / 1000.0f;
-
-    ALOGI(   "using (fd=%d)\n"
-            "id           = %s\n"
-            "xres         = %d px\n"
-            "yres         = %d px\n"
-            "xres_virtual = %d px\n"
-            "yres_virtual = %d px\n"
-            "bpp          = %d\n"
-            "r            = %2u:%u\n"
-            "g            = %2u:%u\n"
-            "b            = %2u:%u\n",
-            fd,
-            finfo.id,
-            info.xres,
-            info.yres,
-            info.xres_virtual,
-            info.yres_virtual,
-            info.bits_per_pixel,
-            info.red.offset, info.red.length,
-            info.green.offset, info.green.length,
-            info.blue.offset, info.blue.length
-    );
-
-    ALOGI(   "width        = %d mm (%f dpi)\n"
-            "height       = %d mm (%f dpi)\n"
-            "refresh rate = %.2f Hz\n",
-            info.width,  xdpi,
-            info.height, ydpi,
-            fps
-    );
-
-
-    if (ioctl(fd, FBIOGET_FSCREENINFO, &finfo) == -1)
-        return -errno;
-
-    if (finfo.smem_len <= 0)
-        return -errno;
-
 
     module->flags = flags;
     module->info = info;
-    module->finfo = finfo;
     module->xdpi = xdpi;
     module->ydpi = ydpi;
     module->fps = fps;
@@ -278,19 +157,7 @@ int mapFrameBufferLocked(struct private_module_t* module, int format)
      * map the framebuffer
      */
 
-    size_t fbSize = roundUpToPageSize(finfo.line_length * info.yres_virtual);
-    module->framebuffer = new private_handle_t(dup(fd), fbSize, 0);
-
-    module->numBuffers = info.yres_virtual / info.yres;
-    module->bufferMask = 0;
-
-    void* vaddr = mmap(0, fbSize, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
-    if (vaddr == MAP_FAILED) {
-        ALOGE("Error mapping the framebuffer (%s)", strerror(errno));
-        return -errno;
-    }
-    module->framebuffer->base = intptr_t(vaddr);
-    memset(vaddr, 0, fbSize);
+    module->framebuffer = new private_handle_t(0, 0, 0);
     return 0;
 }
 
@@ -335,10 +202,8 @@ int fb_device_open(hw_module_t const* module, const char* name,
         private_module_t* m = (private_module_t*)module;
         status = mapFrameBuffer(m);
         if (status >= 0) {
-            int stride = m->finfo.line_length / (m->info.bits_per_pixel >> 3);
-            int format = (m->info.bits_per_pixel == 32)
-                         ? (m->info.red.offset ? HAL_PIXEL_FORMAT_BGRA_8888 : HAL_PIXEL_FORMAT_RGBX_8888)
-                         : HAL_PIXEL_FORMAT_RGB_565;
+	  int stride = 720 * 4;
+	  int format = HAL_PIXEL_FORMAT_RGBA_8888;
             const_cast<uint32_t&>(dev->device.flags) = 0;
             const_cast<uint32_t&>(dev->device.width) = m->info.xres;
             const_cast<uint32_t&>(dev->device.height) = m->info.yres;

@@ -92,16 +92,21 @@ struct private_module_t HAL_MODULE_INFO_SYM = {
     },
     .framebuffer = 0,
     .flags = 0,
-    .numBuffers = 0,
-    .bufferMask = 0,
+    //.numBuffers = 0,
+    //.bufferMask = 0,
     .lock = PTHREAD_MUTEX_INITIALIZER,
-    .currentBuffer = 0,
+    //.currentBuffer = 0,
+    .kms_fd = 0,
 };
 
 /*****************************************************************************/
 
+intptr_t mapDrmBufferLocked(struct private_module_t *m, uint32_t *handle);
+int getPrimeFd(struct private_module_t *m, uint32_t handle);
+void unMapDrmDestroyBuffer(struct private_module_t *m, uint32_t handle, intptr_t map);
+
 static int gralloc_alloc_framebuffer_locked(alloc_device_t* dev,
-        size_t size, int format, int usage, buffer_handle_t* pHandle)
+        size_t size, int format, int /*usage*/, buffer_handle_t* pHandle)
 {
     private_module_t* m = reinterpret_cast<private_module_t*>(
             dev->common.module);
@@ -116,40 +121,29 @@ static int gralloc_alloc_framebuffer_locked(alloc_device_t* dev,
         }
     }
 
-    const uint32_t bufferMask = m->bufferMask;
-    const uint32_t numBuffers = m->numBuffers;
-    const size_t bufferSize = m->finfo.line_length * m->info.yres;
-    if (numBuffers == 1) {
-        // If we have only one buffer, we never use page-flipping. Instead,
-        // we return a regular buffer which will be memcpy'ed to the main
-        // screen when post is called.
-        int newUsage = (usage & ~GRALLOC_USAGE_HW_FB) | GRALLOC_USAGE_HW_2D;
-        return gralloc_alloc_buffer(dev, bufferSize, newUsage, pHandle);
+    uint32_t drm_handle = 0;
+    intptr_t vaddr = mapDrmBufferLocked(m, &drm_handle);
+    if (vaddr == 0 || drm_handle == 0) {
+        ALOGE("mapDrmBufferLocked() failed");
+        return -EINVAL;
     }
-
-    if (bufferMask >= ((1LU<<numBuffers)-1)) {
-        // We ran out of buffers.
-        return -ENOMEM;
+    int prime_fd = getPrimeFd(m, drm_handle);
+    if (prime_fd < 0) {
+        ALOGE("getPrimeFd() failed");
+        return -EINVAL;
     }
 
     // create a "fake" handles for it
-    intptr_t vaddr = intptr_t(m->framebuffer->base);
-    private_handle_t* hnd = new private_handle_t(dup(m->framebuffer->fd), size,
+    private_handle_t* hnd = new private_handle_t(prime_fd, size,
             private_handle_t::PRIV_FLAGS_FRAMEBUFFER);
-
-    // find a free slot
-    for (uint32_t i=0 ; i<numBuffers ; i++) {
-        if ((bufferMask & (1LU<<i)) == 0) {
-            m->bufferMask |= (1LU<<i);
-            break;
-        }
-        vaddr += bufferSize;
-    }
-    
     hnd->base = vaddr;
-    hnd->offset = vaddr - intptr_t(m->framebuffer->base);
+    hnd->offset = 0;
+    hnd->drm_handle = drm_handle;
+    hnd->fb_id = 0;
     *pHandle = hnd;
 
+    ALOGI("gralloc_alloc_framebuffer_locked() drm_handle %d, prime_fd %d, base %lx",
+	  hnd->drm_handle, hnd->fd, hnd->base);
     return 0;
 }
 
@@ -260,16 +254,17 @@ static int gralloc_free(alloc_device_t* dev,
         // free this buffer
         private_module_t* m = reinterpret_cast<private_module_t*>(
                 dev->common.module);
-        const size_t bufferSize = m->finfo.line_length * m->info.yres;
-        int index = (hnd->base - m->framebuffer->base) / bufferSize;
-        m->bufferMask &= ~(1<<index); 
+        //const size_t bufferSize = m->finfo.line_length * m->info.yres;
+        //int index = (hnd->base - m->framebuffer->base) / bufferSize;
+        //m->bufferMask &= ~(1<<index);
+	unMapDrmDestroyBuffer(m, hnd->drm_handle, hnd->base);
     } else { 
         gralloc_module_t* module = reinterpret_cast<gralloc_module_t*>(
                 dev->common.module);
         terminateBuffer(module, const_cast<private_handle_t*>(hnd));
+        close(hnd->fd);
     }
 
-    close(hnd->fd);
     delete hnd;
     return 0;
 }
@@ -287,6 +282,9 @@ static int gralloc_close(struct hw_device_t *dev)
     }
     return 0;
 }
+
+void init_kms(struct private_module_t *m);
+
 
 int gralloc_device_open(const hw_module_t* module, const char* name,
         hw_device_t** device)
@@ -313,5 +311,8 @@ int gralloc_device_open(const hw_module_t* module, const char* name,
     } else {
         status = fb_device_open(module, name, device);
     }
+
+    init_kms((private_module_t*)module);
+
     return status;
 }

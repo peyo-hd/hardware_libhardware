@@ -39,10 +39,10 @@ struct private_module_t {
 
     private_handle_t* framebuffer;
     uint32_t flags;
-    uint32_t numBuffers;
-    uint32_t bufferMask;
+    //uint32_t numBuffers;
+    //uint32_t bufferMask;
     pthread_mutex_t lock;
-    buffer_handle_t currentBuffer;
+    //buffer_handle_t currentBuffer;
     int pmem_master;
     void* pmem_master_base;
 
@@ -51,6 +51,8 @@ struct private_module_t {
     float xdpi;
     float ydpi;
     float fps;
+
+    int kms_fd;
 };
 
 /*****************************************************************************/
@@ -77,6 +79,9 @@ struct private_handle_t {
     // FIXME: the attributes below should be out-of-line
     uint64_t base __attribute__((aligned(8)));
     int     pid;
+
+    uint32_t drm_handle;
+    uint32_t fb_id;
 
 #ifdef __cplusplus
     static inline int sNumInts() {
